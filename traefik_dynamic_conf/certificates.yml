@@ -1,0 +1,42 @@
+tls:
+  certificates:
+    - certFile: /certs/localhost.crt
+      keyFile: /certs/localhost.key
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /certs/localhost.crt
+        keyFile: /certs/localhost.key
+
+http:
+  middlewares:
+    redirect-to-https:
+      redirectScheme:
+        scheme: https
+        permanent: true
+
+  routers:
+    http-catchall:
+      rule: hostregexp(`{host:.+}`)
+      entrypoints:
+        - web
+      middlewares:
+        - redirect-to-https
+      service: noop@internal
+
+    websecure-catchall:
+      rule: hostregexp(`{host:.+}`)
+      entrypoints:
+        - websecure
+      service: noop@internal
+      tls: {}
+
+{{ if ne (env "CERT_RESOLVER") "" }}
+certificatesResolvers:
+  le:
+    acme:
+      email: {{ env "LETSENCRYPT_EMAIL" }}
+      storage: /letsencrypt/acme.json
+      httpChallenge:
+        entryPoint: web
+{{ end }}

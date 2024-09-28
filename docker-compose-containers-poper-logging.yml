@@ -1,0 +1,209 @@
+version: '3.8'
+
+services:
+  reverse-proxy:
+    image: traefik:v3.0
+    environment:
+      - DOMAIN_NAME=${DOMAIN_NAME}
+      - LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL}
+      - TRAEFIK_AUTH=${TRAEFIK_AUTH}
+      - RATE_LIMIT_AVERAGE=${RATE_LIMIT_AVERAGE}
+      - RATE_LIMIT_BURST=${RATE_LIMIT_BURST}
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--providers.file.directory=/etc/traefik/dynamic_conf"
+      - "--providers.file.watch=true"
+      - "--providers.file.filename=/etc/traefik/dynamic_conf/certificates_containers.yml"
+      - "--log.level=DEBUG"
+      - "--accesslog=true"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"  # Traefik dashboard
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "./certs:/certs:ro"
+      - "./traefik_dynamic_conf:/etc/traefik/dynamic_conf:ro"
+    networks:
+      - frontend-network
+      - backend-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.localhost`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.routers.dashboard.tls=true"
+    logging:
+      driver: fluentd
+      options:
+        fluentd-address: localhost:24224
+        tag: reverse-proxy.{{.Name}}
+
+  frontend:
+    image: frontend-image:latest
+    environment:
+      - NODE_ENV=${NODE_ENV}
+      - VITE_API_URL=https://${DOMAIN_NAME}/api
+      - DOMAIN_NAME=${DOMAIN_NAME}
+      - VITE_USE_HTTPS=true
+      - CHOKIDAR_USEPOLLING=true
+#    ports:
+#      - "3000:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: npm run dev
+    networks:
+      - frontend-network
+    depends_on:
+      - reverse-proxy
+    labels:
+      - "traefik.enable=true"
+      # - "traefik.http.routers.frontend.rule=Host(`frontend.localhost`)"
+      - "traefik.http.routers.frontend.rule=Host(`${DOMAIN_NAME}`)"
+      - "traefik.http.services.frontend.loadbalancer.server.port=5173"
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.routers.frontend.tls=true"
+      - "traefik.docker.network=frontend-network"
+      # New in Traefik 3.0: You can add middlewares more easily
+#      - "traefik.http.routers.frontend.middlewares=frontend-compress"
+#      - "traefik.http.middlewares.frontend-compress.compress=true"
+    logging:
+      driver: fluentd
+      options:
+        fluentd-address: localhost:24224
+        tag: frontend.{{.Name}}
+
+  backend:
+    image: backend-image:latest
+    environment:
+      - NODE_ENV=${NODE_ENV}
+      - PORT=5000
+      - DOMAIN_NAME=${DOMAIN_NAME}
+      - FRONTEND=https://${DOMAIN_NAME}
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - JWT_SECRET=${JWT_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - EMAIL_HOST=${EMAIL_HOST}
+      - EMAIL_PORT=${EMAIL_PORT}
+      - EMAIL_USER=${EMAIL_USER}
+      - EMAIL_PASSWORD=${EMAIL_PASSWORD}
+      - EMAIL_FROM=${EMAIL_FROM}
+    volumes:
+      - ./backend/src:/app/src:delegated
+      - /app/node_modules
+      - ./backend/uploads:/app/uploads
+    networks:
+      - backend-network
+    depends_on:
+      - reverse-proxy
+      - mongo
+    labels:
+      - "traefik.enable=true"
+      #- "traefik.http.routers.backend.rule=Host(`backend.localhost`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.backend.rule=Host(`${DOMAIN_NAME}`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.backend.entrypoints=websecure"
+      - "traefik.http.routers.backend.tls=true"
+      - "traefik.http.services.backend.loadbalancer.server.port=5000"
+      - "traefik.docker.network=backend-network"
+    logging:
+      driver: fluentd
+      options:
+        fluentd-address: localhost:24224
+        tag: backend.{{.Name}}
+
+  mongo:
+    image: mongo-image:6.0
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${DB_ROOT_USERNAME}
+      - MONGO_INITDB_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
+      - MONGO_INITDB_DATABASE=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - mongo-data:/data/db
+      - ./backend/mongo/init-mongo-containers.sh:/docker-entrypoint-initdb.d/init-mongo.sh:ro
+      # - ./backend/mongo/mongod.conf:/etc/mongod.conf:ro
+    networks:
+      - backend-network
+    labels:
+      - "traefik.docker.network=backend-network"
+    logging:
+      driver: fluentd
+      options:
+        fluentd-address: localhost:24224
+        tag: mongo.{{.Name}}
+
+  redis:
+    image: redis:6.2
+    volumes:
+      - redis-data:/data
+    networks:
+      - backend-network
+    labels:
+      - "traefik.docker.network=backend-network"
+    logging:
+      driver: fluentd
+      options:
+        fluentd-address: localhost:24224
+        tag: redis.{{.Name}}
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.14.0
+    environment:
+      - discovery.type=single-node
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    networks:
+      - backend-network
+
+  fluentd:
+    image: fluent/fluentd:v1.14-1
+    volumes:
+      - ./fluentd/conf:/fluentd/etc
+    networks:
+      - frontend-network
+      - backend-network
+    depends_on:
+      - elasticsearch
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.14.0
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    networks:
+      - backend-network
+    depends_on:
+      - elasticsearch
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.kibana.rule=Host(`kibana.${DOMAIN_NAME}`)"
+      - "traefik.http.services.kibana.loadbalancer.server.port=5601"
+      - "traefik.http.routers.kibana.entrypoints=websecure"
+      - "traefik.http.routers.kibana.tls=true"
+
+
+networks:
+  frontend-network:
+    driver: bridge
+  backend-network:
+    driver: bridge
+
+volumes:
+  mongo-data:
+  uploads:
+  redis-data:
+  elasticsearch-data:
+
+
+# to run:
+# docker-compose -f containers-docker-compose.yml up -d
+
+# to stop:
+# docker-compose -f containers-docker-compose.yml down

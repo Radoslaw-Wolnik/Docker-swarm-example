@@ -1,0 +1,11 @@
+{
+    "siteName": "My E-commerce Site",
+    "siteDescription": "Welcome to our online store",
+    "siteKeywords": ["e-commerce", "online shopping", "products"],
+    "socialMediaLinks": {
+      "facebook": "https://facebook.com/mystore",
+      "twitter": "https://twitter.com/mystore",
+      "instagram": "https://instagram.com/mystore"
+    },
+    "logoUrl": "/images/logo.png"
+}
