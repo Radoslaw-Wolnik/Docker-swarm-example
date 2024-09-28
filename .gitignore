@@ -1,2 +1,39 @@
-.zig-cache/
+# Secrets
+secrets/*
+!secrets/.gitkeep
+local_secrets.sh
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Node modules
+node_modules/
+
+# Build directories
+dist/
+build/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+
+# SSL certificates (if not using dummy ones for development)
+*.pem
+*.key
+*.crt
+*.csr
+
+# Docker volumes
+mongo-data/
+redis-data/
+uploads/.zig-cache/
 zig-out/
